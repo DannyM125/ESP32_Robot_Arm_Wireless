@@ -1,0 +1,151 @@
+#include <WiFi.h>
+#include <ESP32Servo.h>
+
+Servo servo1;
+Servo servo2;
+Servo servo3;
+Servo servo4;
+Servo servo5;
+
+// GPIO pins for each servo
+int servo1Pin = 14;
+int servo2Pin = 27;
+int servo3Pin = 26;
+int servo4Pin = 25;
+int servo5Pin = 13;
+
+// Network credentials
+const char* ssid = "ESP32_Network";
+const char* password = "12345678";  // Minimum 8 characters
+
+// Set web server port number to 80
+WiFiServer server(80);
+
+//HTTP request
+String header;
+
+int servoPos[5] = {90, 90, 90, 90, 90}; // Default positions for all servos
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Allow allocation of all timers and set PWM frequency
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  
+  servo1.setPeriodHertz(50);
+  servo2.setPeriodHertz(50);
+  servo3.setPeriodHertz(50);
+  servo4.setPeriodHertz(50);
+  servo5.setPeriodHertz(50);
+
+  servo1.attach(servo1Pin, 500, 2400);
+  servo2.attach(servo2Pin, 500, 2400);
+  servo3.attach(servo3Pin, 500, 2400);
+  servo4.attach(servo4Pin, 500, 2400);
+  servo5.attach(servo5Pin, 500, 2400);
+
+  //ESP32 in Access Point mode
+  Serial.println("Setting up Access Point...");
+  bool success = WiFi.softAP(ssid, password);
+  if (success) {
+    delay(1000);
+    IPAddress IP = WiFi.softAPIP();
+    Serial.print("Access Point IP address: ");
+    Serial.println(IP);
+  } else {
+    Serial.println("Failed to set up Access Point!");
+  }
+  
+  // Start web server
+  server.begin();
+}
+
+void loop() {
+  WiFiClient client = server.available();   // Listen for incoming clients
+
+  if (client) {
+    Serial.println("New Client.");          
+
+    String currentLine = "";                
+    while (client.connected()) {            
+      if (client.available()) {             
+        char c = client.read();             
+        Serial.write(c);                    
+        header += c;
+        
+        if (c == '\n') {                    
+          if (currentLine.length() == 0) {
+            // HTTP headers and web page content
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println("Connection: close");
+            client.println();
+
+            // HTML for the web page
+            client.println("<!DOCTYPE html><html>");
+            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+            client.println("<style>body { text-align: center; font-family: Arial;}</style>");
+            client.println("</head><body><h1>ESP32 Multi-Servo Control</h1>");
+            
+            // Add sliders for each servo
+            for (int i = 1; i <= 5; i++) {
+              int maxVal = (i == 2) ? 120 : 180;  // Limit Servo 2 to 120 degrees
+              client.println("<p>Servo " + String(i) + " Position: <span id=\"servoPos" + String(i) + "\">" + String(servoPos[i-1]) + "</span></p>");
+              client.println("<input type=\"range\" min=\"0\" max=\"" + String(maxVal) + "\" id=\"servoSlider" + String(i) + "\" value=\"" + String(servoPos[i-1]) + "\" onchange=\"servo(" + String(i) + ", this.value)\"/>");
+            }
+
+            client.println("<script>");
+            client.println("function servo(num, pos) {");
+            client.println("  fetch('/?servo=' + num + '&value=' + pos);");
+            client.println("  document.getElementById('servoPos' + num).innerHTML = pos;");
+            client.println("}");
+            client.println("</script>");
+
+            client.println("</body></html>");
+            
+            // Parse HTTP GET request for servo control
+            if (header.indexOf("GET /?servo=") >= 0) {
+              int servoNumIndex = header.indexOf("servo=") + 6;
+              int valueIndex = header.indexOf("value=") + 6;
+
+              int servoNum = header.substring(servoNumIndex, header.indexOf('&')).toInt();
+              int value = header.substring(valueIndex, header.indexOf(' ', valueIndex)).toInt();
+
+              // Validate servo number and position
+              if (servoNum >= 1 && servoNum <= 5) {
+                if (servoNum == 2) {
+                  value = min(value, 120);  // Limit Servo 2 to a max of 120
+                }
+                servoPos[servoNum - 1] = value;  // Update the servo position array
+
+                // Move the correct servo to the new position
+                switch (servoNum) {
+                  case 1: servo1.write(value); break;
+                  case 2: servo2.write(value); break;
+                  case 3: servo3.write(value); break;
+                  case 4: servo4.write(value); break;
+                  case 5: servo5.write(value); break;
+                }
+                Serial.println("Servo " + String(servoNum) + " moved to angle: " + String(value));
+              }
+            }
+
+            client.println();
+            break;
+          } else {
+            currentLine = "";
+          }
+        } else if (c != '\r') {
+          currentLine += c;
+        }
+      }
+    }
+
+    header = "";
+    client.stop();
+    Serial.println("Client disconnected.");
+  }
+}
